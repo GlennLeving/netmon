@@ -1,0 +1,14 @@
+{
+  "interval_seconds": 30,
+  "timeout_seconds": 2.0,
+  "ping_count": 1,
+  "fail_threshold": 3,
+  "recover_threshold": 2,
+  "retention_days": 30,
+  "targets": [
+    { "name": "Cloudflare DNS", "host": "1.1.1.1", "kind": "internet", "enabled": true },
+    { "name": "Google DNS", "host": "8.8.8.8", "kind": "internet", "enabled": true },
+    { "name": "Google DNS 2", "host": "8.8.4.4", "kind": "internet", "enabled": true },
+    { "name": "Gateway/Router", "host": "192.168.1.1", "kind": "lan", "enabled": true }
+  ]
+}

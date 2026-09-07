@@ -1,0 +1,14 @@
+# adgangskode-hash - hoerer aldrig hjemme i et repo
+auth.json
+
+# lokal opsaetning med dine egne IP-adresser
+config.json
+
+# maalinger og logs
+netmon.db
+netmon.db-wal
+netmon.db-shm
+netmon.log
+
+__pycache__/
+*.pyc
