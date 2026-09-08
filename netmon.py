@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-netmon - overvaager netvaerk/ISP ved at pinge testservere og logge nedetid.
+netmon - watches the network/ISP by pinging test servers and logging outages.
 
-Ingen eksterne dependencies. Kun Python stdlib + systemets 'ping'.
+Tells a local network failure apart from an outage at the provider.
+No external dependencies. Python stdlib plus the system 'ping'.
 
-Start:  python3 netmon.py            (web-UI paa http://127.0.0.1:8420)
+Start:  python3 netmon.py            (web UI on http://127.0.0.1:8420)
         python3 netmon.py --host 0.0.0.0 --port 8420
 
 Author: Glenn Leving
@@ -44,12 +45,12 @@ IS_WINDOWS = platform.system().lower().startswith("win")
 IS_MAC = platform.system().lower() == "darwin"
 
 DEFAULT_CONFIG = {
-    "interval_seconds": 30,      # frekvens: hvor ofte der pinges
-    "timeout_seconds": 2.0,      # wait-time: hvor laenge der ventes paa svar
-    "ping_count": 1,             # antal pings pr. maaling
-    "fail_threshold": 3,         # antal fejl i traek foer "nede"
-    "recover_threshold": 2,      # antal ok i traek foer "oppe" igen
-    "retention_days": 30,        # hvor laenge maalinger gemmes
+    "interval_seconds": 30,      # how often the targets are pinged
+    "timeout_seconds": 2.0,      # how long to wait for a reply
+    "ping_count": 1,             # pings per measurement
+    "fail_threshold": 3,         # failures in a row before "down"
+    "recover_threshold": 2,      # successes in a row before "up" again
+    "retention_days": 30,        # how long measurements are kept
     "targets": [
         {"name": "Cloudflare DNS", "host": "1.1.1.1", "kind": "internet", "enabled": True},
         {"name": "Google DNS", "host": "8.8.8.8", "kind": "internet", "enabled": True},
@@ -68,6 +69,8 @@ CONFIG_LIMITS = {
 }
 
 HOST_RE = re.compile(r"^[A-Za-z0-9._:\-]{1,255}$")
+# Matches both English and Danish ping output, since the system locale decides
+# which one we get: "time=12.3 ms" / "tid=12,3 ms".
 RTT_RE = re.compile(r"(?:time|tid)[=<]\s*([0-9.,]+)\s*ms", re.IGNORECASE)
 
 
@@ -86,8 +89,8 @@ def load_config() -> dict:
             with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
                 raw = json.load(fh)
             _config = validate_config(raw)
-        except Exception as exc:  # korrupt config maa ikke vaelte programmet
-            print(f"[netmon] kunne ikke laese config.json ({exc}) - bruger standard", file=sys.stderr)
+        except Exception as exc:  # a corrupt config must not take the program down
+            print(f"[netmon] could not read config.json ({exc}) - using defaults", file=sys.stderr)
             _config = json.loads(json.dumps(DEFAULT_CONFIG))
     save_config(_config)
     return _config
@@ -103,7 +106,7 @@ def save_config(cfg: dict) -> None:
 
 def validate_config(raw: dict) -> dict:
     if not isinstance(raw, dict):
-        raise ValueError("config skal vaere et objekt")
+        raise ValueError("config must be an object")
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
 
     for key, (lo, hi) in CONFIG_LIMITS.items():
@@ -112,24 +115,24 @@ def validate_config(raw: dict) -> dict:
         try:
             val = float(raw[key]) if key == "timeout_seconds" else int(raw[key])
         except (TypeError, ValueError):
-            raise ValueError(f"{key} skal vaere et tal")
+            raise ValueError(f"{key} must be a number")
         if not (lo <= val <= hi):
-            raise ValueError(f"{key} skal vaere mellem {lo} og {hi}")
+            raise ValueError(f"{key} must be between {lo} and {hi}")
         cfg[key] = val
 
     targets = raw.get("targets", cfg["targets"])
     if not isinstance(targets, list):
-        raise ValueError("targets skal vaere en liste")
+        raise ValueError("targets must be a list")
     clean: list[dict] = []
     seen: set[str] = set()
     for item in targets:
         if not isinstance(item, dict):
-            raise ValueError("hver testserver skal vaere et objekt")
+            raise ValueError("every test server must be an object")
         host = str(item.get("host", "")).strip()
         if not host:
             continue
         if not HOST_RE.match(host):
-            raise ValueError(f"ugyldig vaert: {host!r}")
+            raise ValueError(f"invalid host: {host!r}")
         if host in seen:
             continue
         seen.add(host)
@@ -143,7 +146,7 @@ def validate_config(raw: dict) -> dict:
             "enabled": bool(item.get("enabled", True)),
         })
     if not clean:
-        raise ValueError("der skal vaere mindst en testserver")
+        raise ValueError("there must be at least one test server")
     cfg["targets"] = clean
     return cfg
 
@@ -164,21 +167,22 @@ def set_config(new_cfg: dict) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Adgangskode / sessioner
+# Password and sessions
 #
-# Kun laesning af status er aabent. Aendring af indstillinger kraever login.
-# Adgangskoden gemmes aldrig i klartekst - kun som PBKDF2-hash i auth.json.
+# Reading the status is open to everyone. Changing the settings requires a
+# login. The password is never stored in clear text - only as a PBKDF2 hash
+# in auth.json.
 # --------------------------------------------------------------------------
 
 PBKDF2_ITERATIONS = 240_000
-SESSION_TTL = 12 * 3600          # hvor laenge et login holder
+SESSION_TTL = 12 * 3600          # how long a login lasts
 SESSION_COOKIE = "netmon_session"
-MAX_FAILED = 5                   # forsoeg foer midlertidig spaerring
+MAX_FAILED = 5                   # attempts before a temporary block
 LOCKOUT_SECONDS = 300
 
 _auth_lock = threading.Lock()
-_sessions: dict[str, float] = {}          # token -> udloeber
-_failed: dict[str, tuple[int, float]] = {}  # ip -> (antal, spaerret indtil)
+_sessions: dict[str, float] = {}          # token -> expiry
+_failed: dict[str, tuple[int, float]] = {}  # ip -> (count, blocked until)
 
 
 def hash_password(password: str, salt: bytes | None = None) -> dict:
@@ -189,7 +193,7 @@ def hash_password(password: str, salt: bytes | None = None) -> dict:
 
 def set_password(password: str) -> None:
     if len(password) < 4:
-        raise ValueError("adgangskoden skal vaere mindst 4 tegn")
+        raise ValueError("the password must be at least 4 characters")
     tmp = AUTH_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(hash_password(password), fh, indent=2)
@@ -197,7 +201,7 @@ def set_password(password: str) -> None:
     os.replace(tmp, AUTH_PATH)
     os.chmod(AUTH_PATH, 0o600)
     with _auth_lock:
-        _sessions.clear()          # skift af kode logger alle ud
+        _sessions.clear()          # changing the password logs everyone out
 
 
 def check_password(password: str) -> bool:
@@ -258,7 +262,7 @@ def note_login(ip: str, ok: bool) -> None:
         count += 1
         if count >= MAX_FAILED:
             _failed[ip] = (0, time.time() + LOCKOUT_SECONDS)
-            print(f"[netmon] for mange fejlede logins fra {ip} - spaerret i {LOCKOUT_SECONDS}s")
+            print(f"[netmon] too many failed logins from {ip} - blocked for {LOCKOUT_SECONDS}s")
         else:
             _failed[ip] = (count, until)
 
@@ -319,7 +323,7 @@ def db_read(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
 # --------------------------------------------------------------------------
 
 def ping_once(host: str, count: int, timeout: float) -> tuple[bool, float | None, str | None]:
-    """Returnerer (ok, rtt_ms, fejltekst)."""
+    """Returns (ok, rtt_ms, error text)."""
     if IS_WINDOWS:
         cmd = ["ping", "-n", str(count), "-w", str(int(timeout * 1000)), host]
     elif IS_MAC:
@@ -336,7 +340,7 @@ def ping_once(host: str, count: int, timeout: float) -> tuple[bool, float | None
     except subprocess.TimeoutExpired:
         return False, None, "timeout"
     except FileNotFoundError:
-        return False, None, "ping-kommandoen blev ikke fundet"
+        return False, None, "the ping command was not found"
     except Exception as exc:
         return False, None, str(exc)[:200]
 
@@ -347,14 +351,14 @@ def ping_once(host: str, count: int, timeout: float) -> tuple[bool, float | None
     if proc.returncode == 0 and rtt is not None:
         return True, rtt, None
 
-    err = "ingen svar"
+    err = "no reply"
     low = out.lower()
     if "unknown host" in low or "name or service not known" in low or "could not find host" in low:
-        err = "ukendt vaert"
-    elif "unreachable" in low or "uopnaaelig" in low:
+        err = "unknown host"
+    elif "unreachable" in low or "uopnaaelig" in low:   # Danish locale says uopnaaelig
         err = "unreachable"
     elif "operation not permitted" in low:
-        err = "ingen rettigheder til ping"
+        err = "not permitted to ping"
     return False, rtt, err
 
 
@@ -374,7 +378,7 @@ class TargetState:
         self.last_ok: bool | None = None
         self.last_rtt: float | None = None
         self.last_error: str | None = None
-        self.since: float | None = None   # hvornaar nuvaerende status startede
+        self.since: float | None = None   # when the current status began
         self.outage_id: int | None = None
         self.history: deque = deque(maxlen=120)
 
@@ -398,14 +402,14 @@ class Monitor(threading.Thread):
     def wake(self) -> None:
         self._wake.set()
 
-    # -- livscyklus -------------------------------------------------------
+    # -- lifecycle --------------------------------------------------------
     def run(self) -> None:
         while True:
             cfg = get_config()
             try:
                 self.run_round(cfg)
             except Exception as exc:
-                print(f"[netmon] fejl i maalerunde: {exc}", file=sys.stderr)
+                print(f"[netmon] error in measurement round: {exc}", file=sys.stderr)
             self.prune(cfg)
             self.next_round = time.time() + cfg["interval_seconds"]
             self._wake.wait(timeout=cfg["interval_seconds"])
@@ -465,9 +469,9 @@ class Monitor(threading.Thread):
                 st.status, st.since = "down", now
                 st.outage_id = db_write(
                     "INSERT INTO outages(scope, name, started, detail) VALUES (?,?,?,?)",
-                    ("target", st.host, now, err or "ingen svar"),
+                    ("target", st.host, now, err or "no reply"),
                 )
-                print(f"[netmon] NEDE: {st.name} ({st.host}) - {err or 'ingen svar'}")
+                print(f"[netmon] DOWN: {st.name} ({st.host}) - {err or 'no reply'}")
             elif st.status != "up" and st.consecutive_ok >= cfg["recover_threshold"]:
                 was = st.status
                 st.status, st.since = "up", now
@@ -475,10 +479,10 @@ class Monitor(threading.Thread):
                     db_write("UPDATE outages SET ended=? WHERE id=?", (now, st.outage_id))
                     st.outage_id = None
                 if was == "down":
-                    print(f"[netmon] OPPE igen: {st.name} ({st.host})")
+                    print(f"[netmon] UP again: {st.name} ({st.host})")
 
     def assess_link(self, active: list[TargetState], now: float) -> None:
-        """Skelner mellem lokalt netvaerk nede og ISP/internet nede."""
+        """Tells a local network failure apart from an ISP/internet outage."""
         lan = [s for s in active if s.kind == "lan"]
         net = [s for s in active if s.kind == "internet"]
 
@@ -501,9 +505,9 @@ class Monitor(threading.Thread):
             isp_down = (net_s == "down") and (lan_s == "up")
             internet_down = False
 
-        self.set_link("lan", lan_down, now, "alle LAN-vaerter svarer ikke")
-        self.set_link("isp", isp_down, now, "LAN er oppe, men ingen internet-vaerter svarer")
-        self.set_link("internet", internet_down, now, "ingen internet-vaerter svarer")
+        self.set_link("lan", lan_down, now, "no LAN host is answering")
+        self.set_link("isp", isp_down, now, "LAN is up, but no internet host answers")
+        self.set_link("internet", internet_down, now, "no internet host is answering")
 
     def set_link(self, key: str, is_down: bool, now: float, detail: str) -> None:
         cur = self.link_status[key]
@@ -514,14 +518,14 @@ class Monitor(threading.Thread):
                 "INSERT INTO outages(scope, name, started, detail) VALUES (?,?,?,?)",
                 (key, key.upper(), now, detail),
             )
-            print(f"[netmon] {key.upper()} NEDE: {detail}")
+            print(f"[netmon] {key.upper()} DOWN: {detail}")
         elif not is_down and cur != "up":
             self.link_status[key] = "up"
             self.link_since[key] = now
             if self.link_outage[key] is not None:
                 db_write("UPDATE outages SET ended=? WHERE id=?", (now, self.link_outage[key]))
                 self.link_outage[key] = None
-                print(f"[netmon] {key.upper()} OPPE igen")
+                print(f"[netmon] {key.upper()} UP again")
 
     def prune(self, cfg: dict) -> None:
         now = time.time()
@@ -532,7 +536,7 @@ class Monitor(threading.Thread):
         db_write("DELETE FROM samples WHERE ts < ?", (cutoff,))
         db_write("DELETE FROM outages WHERE ended IS NOT NULL AND ended < ?", (cutoff,))
 
-    # -- status til UI ----------------------------------------------------
+    # -- status for the UI ------------------------------------------------
     def snapshot(self) -> dict:
         cfg = get_config()
         now = time.time()
@@ -591,10 +595,10 @@ MON = Monitor()
 class Handler(BaseHTTPRequestHandler):
     server_version = "netmon"
 
-    def log_message(self, fmt, *args):  # stille som standard
+    def log_message(self, fmt, *args):  # quiet by default
         pass
 
-    # -- hjaelpere --------------------------------------------------------
+    # -- helpers ----------------------------------------------------------
     def send_json(self, obj, code: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
@@ -630,10 +634,10 @@ class Handler(BaseHTTPRequestHandler):
         return valid_session(self.session_token())
 
     def require_auth(self) -> bool:
-        """True hvis kaldet maa fortsaette; sender ellers 401."""
+        """True if the call may proceed; otherwise sends a 401."""
         if self.authed():
             return True
-        self.send_json({"error": "login kraeves", "auth_required": True}, 401)
+        self.send_json({"error": "login required", "auth_required": True}, 401)
         return False
 
     def send_session_cookie(self, token: str | None) -> None:
@@ -646,10 +650,10 @@ class Handler(BaseHTTPRequestHandler):
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > 1_000_000:
-            raise ValueError("tom eller for stor anmodning")
+            raise ValueError("empty or oversized request")
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
-    # -- ruter ------------------------------------------------------------
+    # -- routes -----------------------------------------------------------
     def do_GET(self):
         url = urlparse(self.path)
         path, qs = url.path, parse_qs(url.query)
@@ -671,7 +675,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"samples": self.history(qs)})
             if path == "/api/export.csv":
                 return self.export_csv(qs)
-            self.send_json({"error": "ukendt endpoint"}, 404)
+            self.send_json({"error": "unknown endpoint"}, 404)
         except Exception as exc:
             self.send_json({"error": str(exc)}, 500)
 
@@ -689,7 +693,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 cfg = set_config(self.read_json())
                 MON.wake()
-                print(f"[netmon] indstillinger aendret fra {self.client_ip()}")
+                print(f"[netmon] settings changed from {self.client_ip()}")
                 return self.send_json({"ok": True, "config": cfg})
             if path == "/api/check-now":
                 MON.wake()
@@ -704,12 +708,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 body = self.read_json()
                 if not check_password(str(body.get("current", ""))):
-                    return self.send_json({"error": "forkert nuvaerende adgangskode"}, 403)
+                    return self.send_json({"error": "wrong current password"}, 403)
                 set_password(str(body.get("new", "")))
                 self.send_session_cookie(None)
-                print(f"[netmon] adgangskode aendret fra {self.client_ip()}")
+                print(f"[netmon] password changed from {self.client_ip()}")
                 return self.send_json({"ok": True, "authed": False})
-            self.send_json({"error": "ukendt endpoint"}, 404)
+            self.send_json({"error": "unknown endpoint"}, 404)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:
@@ -720,7 +724,7 @@ class Handler(BaseHTTPRequestHandler):
         left = lockout_left(ip)
         if left:
             return self.send_json(
-                {"error": f"for mange forsoeg - proev igen om {left} sekunder"}, 429)
+                {"error": f"too many attempts - try again in {left} seconds"}, 429)
         try:
             password = str(self.read_json().get("password", ""))
         except Exception:
@@ -728,12 +732,12 @@ class Handler(BaseHTTPRequestHandler):
         ok = bool(password) and check_password(password)
         note_login(ip, ok)
         if not ok:
-            time.sleep(0.5)          # bremser gaetteforsoeg
-            return self.send_json({"error": "forkert adgangskode"}, 401)
+            time.sleep(0.5)          # slows down guessing
+            return self.send_json({"error": "wrong password"}, 401)
         self.send_session_cookie(new_session())
         self.send_json({"ok": True, "authed": True})
 
-    # -- dataudtraek ------------------------------------------------------
+    # -- data extraction --------------------------------------------------
     def outages(self, qs) -> list[dict]:
         limit = min(int(qs.get("limit", ["200"])[0]), 2000)
         scope = qs.get("scope", ["all"])[0]
@@ -760,7 +764,7 @@ class Handler(BaseHTTPRequestHandler):
         hours = min(float(qs.get("hours", ["24"])[0]), 24 * 365)
         limit = min(int(qs.get("limit", ["1000"])[0]), 20000)
         if not host:
-            raise ValueError("host mangler")
+            raise ValueError("host is missing")
         rows = db_read(
             "SELECT ts, ok, rtt_ms, error FROM samples WHERE host=? AND ts>? "
             "ORDER BY ts DESC LIMIT ?",
@@ -770,7 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                 for r in reversed(rows)]
 
     def export_csv(self, qs) -> None:
-        lines = ["scope,name,start,slut,varighed_sekunder,detalje"]
+        lines = ["scope,name,start,end,duration_seconds,detail"]
         for o in self.outages(qs):
             start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(o["started"]))
             end = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(o["ended"])) if o["ended"] else ""
@@ -782,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
     def serve_static(self, rel: str) -> None:
         safe = os.path.normpath(os.path.join(STATIC_DIR, rel))
         if not safe.startswith(STATIC_DIR) or not os.path.isfile(safe):
-            return self.send_json({"error": "ikke fundet"}, 404)
+            return self.send_json({"error": "not found"}, 404)
         ctype = {
             ".html": "text/html; charset=utf-8",
             ".css": "text/css; charset=utf-8",
@@ -794,23 +798,24 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Netvaerks-/ISP-overvaagning med web-UI")
-    ap.add_argument("--host", default="127.0.0.1", help="lytte-adresse (0.0.0.0 for hele nettet)")
+    ap = argparse.ArgumentParser(description="netmon - network/ISP monitoring with a web UI")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="listen address (0.0.0.0 for the whole network)")
     ap.add_argument("--port", type=int, default=8420)
     ap.add_argument("--set-password", action="store_true",
-                    help="saet ny adgangskode til indstillinger og afslut")
+                    help="set the password that protects the settings, then exit")
     args = ap.parse_args()
 
     if args.set_password:
-        pw = getpass.getpass("Ny adgangskode: ")
-        if pw != getpass.getpass("Gentag: "):
-            sys.exit("adgangskoderne er ikke ens")
+        pw = getpass.getpass("New password: ")
+        if pw != getpass.getpass("Repeat: "):
+            sys.exit("the passwords do not match")
         set_password(pw)
-        print(f"[netmon] adgangskode gemt i {AUTH_PATH}")
+        print(f"[netmon] password stored in {AUTH_PATH}")
         return
 
     if not os.path.exists(AUTH_PATH):
-        sys.exit(f"[netmon] ingen adgangskode sat - koer: python3 netmon.py --set-password")
+        sys.exit("[netmon] no password set - run: python3 netmon.py --set-password")
 
     sys.stdout.reconfigure(line_buffering=True)
 
@@ -820,13 +825,13 @@ def main() -> None:
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     shown = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
-    print(f"[netmon] web-UI: http://{shown}:{args.port}")
+    print(f"[netmon] web UI: http://{shown}:{args.port}")
     print(f"[netmon] database: {DB_PATH}")
-    print("[netmon] indstillinger er beskyttet med adgangskode")
+    print("[netmon] the settings are protected by a password")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n[netmon] stopper")
+        print("\n[netmon] stopping")
     finally:
         httpd.server_close()
 

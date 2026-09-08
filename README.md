@@ -2,144 +2,153 @@
 
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
-Overvaager netvaerket ved at pinge et sat testservere med jaevne mellemrum, og logger
-naar noget er nede. Skelner mellem **lokalt netvaerk nede** og **ISP/internet nede**.
+Watches your network by pinging a set of test servers at a fixed interval and
+logging when something goes down. It tells **your local network being down**
+apart from **your ISP or the internet being down** — so when the connection
+drops you know whether to look at your own cable or to call the provider.
 
-Ingen dependencies - kun Python 3 stdlib og systemets `ping`.
+No dependencies — Python 3 standard library only, plus the system `ping`.
 
-## Installation
+## Install
 
-Kraever kun Python 3.9+ og systemets `ping`. Ingen pip-pakker.
+Needs Python 3.9+ and the system `ping`. No pip packages.
 
 ```
 git clone https://github.com/GlennLeving/netmon.git
 cd netmon
-python3 netmon.py --set-password     # saet adgangskode til indstillinger
+python3 netmon.py --set-password     # set the password that protects the settings
 ./start.sh
 ```
 
-Foerste start opretter `config.json` ud fra standardvaerdierne - se
-`config.example.json`. Resten kan aendres i web-UI'et.
+The first start creates `config.json` from the defaults — see
+`config.example.json`. Everything else can be changed in the web UI.
 
 ## Start
 
 ```
 ./start.sh                      # http://127.0.0.1:8420
-./start.sh --host 0.0.0.0       # tilgaengelig fra andre maskiner paa nettet
+./start.sh --host 0.0.0.0       # reachable from other machines
 ./start.sh --port 9000
 ```
 
-## Hvordan nedetid bestemmes
+## How an outage is classified
 
-Hver testserver markeres som **LAN** (fx din router, `192.168.1.1`) eller **internet**
-(fx `1.1.1.1`, `8.8.8.8`, `8.8.4.4`).
+Each test server is marked either **LAN** (your router, say `192.168.1.1`) or
+**internet** (`1.1.1.1`, `8.8.8.8`, `8.8.4.4`).
 
-| Situation | Logges som |
+| Situation | Logged as |
 |---|---|
-| En enkelt server svarer ikke | `target`-nedetid for den server |
-| Alle LAN-vaerter svarer ikke | `LAN` - lokalt netvaerk/kabel/router nede |
-| LAN oppe, men alle internet-vaerter nede | `ISP` - din udbyder er nede |
-| Ingen LAN-vaert defineret, alle internet-vaerter nede | `INTERNET` (aarsag ukendt) |
+| A single server stops answering | `target` outage for that server |
+| No LAN host answers | `LAN` — local network, cable or router is down |
+| LAN is up, but no internet host answers | `ISP` — your provider is down |
+| No LAN host defined, no internet host answers | `INTERNET` (cause unknown) |
 
-En server skal fejle `fail_threshold` gange i traek foer den regnes for nede - det
-undgaar falske alarmer ved en enkelt tabt pakke.
+A server has to fail `fail_threshold` times in a row before it counts as down.
+That keeps a single dropped packet from raising a false alarm.
 
-## Adgangskode
+## Password
 
-Status-siden er aaben for alle der kan naa den, men **aendring af indstillinger kraever login**.
-Beskyttede kald: gem indstillinger, ryd nedetids-log, skift adgangskode.
+The status page is open to anyone who can reach it, but **changing the settings
+requires a login**. Protected calls: saving settings, clearing the outage log,
+changing the password.
 
-* Koden gemmes kun som PBKDF2-hash (240.000 runder, tilfaeldigt salt) i `auth.json` (chmod 600) -
-  aldrig i klartekst, og aldrig i `config.json` som er offentligt laesbar.
-* Login giver en tilfaeldig session-cookie (HttpOnly, SameSite=Strict) der holder 12 timer.
-* 5 fejlede forsoeg fra samme IP spaerrer login i 5 minutter.
+* Stored only as a PBKDF2 hash (240,000 rounds, random salt) in `auth.json`
+  (chmod 600) — never in clear text, and never in `config.json`, which is
+  world-readable.
+* A login yields a random session cookie (HttpOnly, SameSite=Strict) valid for
+  12 hours.
+* 5 failed attempts from one IP block that IP for 5 minutes.
 
-Skift kode i web-UI'et under Indstillinger, eller fra terminalen:
+Change it in the web UI under Settings, or from the terminal:
 
 ```
 python3 netmon.py --set-password
 ```
 
-Har du glemt koden: slet `auth.json` og koer `--set-password` igen.
+Forgot it? Delete `auth.json` and run `--set-password` again.
 
-> Bemaerk: trafikken er ualmindelig HTTP, saa koden sendes ukrypteret over netvaerket.
-> Det er fint paa et hjemmenetvaerk, men brug ikke en kode du genbruger andre steder.
+> Note: traffic is plain HTTP, so the password crosses the network unencrypted.
+> That is fine on a home network, but do not reuse a password from elsewhere.
 
-## Indstillinger (i web-UI eller `config.json`)
+## Settings (in the web UI or `config.json`)
 
-| Felt | Betydning |
+| Field | Meaning |
 |---|---|
-| `interval_seconds` | Frekvens - sekunder mellem maalerunder |
-| `timeout_seconds` | Wait-time - hvor laenge der ventes paa ping-svar |
-| `ping_count` | Antal pings pr. maaling (bedste svartid bruges) |
-| `fail_threshold` | Fejl i traek foer status = nede |
-| `recover_threshold` | OK i traek foer status = oppe igen |
-| `retention_days` | Hvor laenge raa maalinger gemmes |
+| `interval_seconds` | Seconds between measurement rounds |
+| `timeout_seconds` | How long to wait for a ping reply |
+| `ping_count` | Pings per measurement (the best round-trip time is used) |
+| `fail_threshold` | Failures in a row before the status becomes down |
+| `recover_threshold` | Successes in a row before it is up again |
+| `retention_days` | How long raw measurements are kept |
 | `targets[]` | `{name, host, kind: internet\|lan, enabled}` |
 
-Aendringer via web-UI gemmes i `config.json` og traeder i kraft med det samme.
+Changes made in the web UI are written to `config.json` and take effect
+immediately.
 
 ## Data
 
-* `netmon.db` (sqlite) - `samples` (hver enkelt ping) og `outages` (nedetids-haendelser).
-* Log kan hentes som CSV fra UI'et eller `GET /api/export.csv`.
+* `netmon.db` (sqlite) — `samples` (every single ping) and `outages` (outage
+  events).
+* The log can be exported as CSV from the UI or with `GET /api/export.csv`.
 
-Direkte forespoergsel:
+Query directly:
 
 ```
-sqlite3 netmon.db "SELECT scope, name, datetime(started,'unixepoch','localtime') AS start, ROUND(COALESCE(ended, strftime('%s','now')) - started) AS sekunder FROM outages ORDER BY started DESC LIMIT 20;"
+sqlite3 netmon.db "SELECT scope, name, datetime(started,'unixepoch','localtime') AS start, ROUND(COALESCE(ended, strftime('%s','now')) - started) AS seconds FROM outages ORDER BY started DESC LIMIT 20;"
 ```
 
 ## API
 
-| Endpoint | Beskrivelse |
+| Endpoint | Description |
 |---|---|
-| `GET /api/status` | Live status for alle servere + LAN/ISP-vurdering |
-| `GET /api/config` / `POST /api/config` | Laes/skriv indstillinger |
-| `GET /api/outages?scope=all\|link\|target&limit=N` | Nedetids-log |
-| `GET /api/history?host=1.1.1.1&hours=24` | Raa maalinger |
-| `GET /api/export.csv` | Log som CSV |
-| `POST /api/check-now` | Koer en maalerunde med det samme |
-| `POST /api/clear-log` | Slet afsluttede haendelser (kraever login) |
-| `POST /api/login` / `POST /api/logout` | `{"password": "..."}` - giver session-cookie |
+| `GET /api/status` | Live status for every server plus the LAN/ISP verdict |
+| `GET /api/config` / `POST /api/config` | Read and write settings |
+| `GET /api/outages?scope=all\|link\|target&limit=N` | Outage log |
+| `GET /api/history?host=1.1.1.1&hours=24` | Raw measurements |
+| `GET /api/export.csv` | The log as CSV |
+| `POST /api/check-now` | Run a measurement round straight away |
+| `POST /api/clear-log` | Delete finished events (requires a login) |
+| `POST /api/login` / `POST /api/logout` | `{"password": "..."}` — sets a session cookie |
 | `GET /api/session` | `{authed, lockout}` |
-| `POST /api/set-password` | `{"current": "...", "new": "..."}` (kraever login) |
+| `POST /api/set-password` | `{"current": "...", "new": "..."}` (requires a login) |
 
-`POST /api/config` kraever ogsaa login.
+`POST /api/config` requires a login as well.
 
-## Koer som baggrundstjeneste (systemd)
+## Run as a background service (systemd)
 
-Servicen er allerede installeret som **bruger-service** i
-`~/.config/systemd/user/netmon.service` og starter automatisk ved boot.
+The service is installed as a **user service** in
+`~/.config/systemd/user/netmon.service` and starts automatically at boot.
 
 ```
-systemctl --user status netmon      # koerer den?
-systemctl --user restart netmon     # genstart (fx efter kodeaendring)
+systemctl --user status netmon      # is it running?
+systemctl --user restart netmon     # restart, e.g. after changing the password
 systemctl --user stop netmon
-systemctl --user disable --now netmon   # slaa auto-start fra
-journalctl --user -u netmon -f      # foelg loggen live
+systemctl --user disable --now netmon   # turn auto-start off
+journalctl --user -u netmon -f      # follow the log live
 ```
 
-Detaljer:
+Details:
 
-* `Restart=always` - starter igen 5 sekunder efter et crash.
-* `loginctl enable-linger glenn` er slaaet til, saa den koerer selvom du ikke er logget ind.
-* Loggen gaar til journalen (`journalctl --user -u netmon`), ikke til `netmon.log`.
-* Servicen koerer med `ProtectSystem=strict` og maa kun skrive i `~/netmon`.
+* `Restart=always` — starts again 5 seconds after a crash.
+* `loginctl enable-linger glenn` is on, so it runs even when you are not logged in.
+* The log goes to the journal (`journalctl --user -u netmon`), not to `netmon.log`.
+* The service runs with `ProtectSystem=strict` and may only write inside `~/netmon`.
 
-Skal port eller lytte-adresse aendres, ret `ExecStart` i unit-filen og koer:
+To change the port or listen address, edit `ExecStart` in the unit file and run:
 
 ```
 systemctl --user daemon-reload && systemctl --user restart netmon
 ```
 
-## Noter
+## Notes
 
-* Selve status-visningen er aaben uden login - bind kun til `0.0.0.0` paa et netvaerk du stoler paa.
-* Stop tjenesten med `pkill -f netmon.py` (husk at matche hele kommandolinjen hvis du bruger flag).
-* Nogle vaerter (fx enkelte routere/firewalls) svarer ikke paa ICMP selv om de er oppe -
-  test med `ping <ip>` i terminalen foer du tilfoejer dem.
+* The status view itself is open without a login — only bind to `0.0.0.0` on a
+  network you trust.
+* Stop the service with `pkill -f netmon.py` (match the whole command line if you
+  use flags).
+* Some hosts (a few routers and firewalls) do not answer ICMP even when they are
+  up — test with `ping <ip>` in the terminal before adding one.
 
-## Licens
+## License
 
-MIT - se [LICENSE](LICENSE). Author: Glenn Leving.
+MIT — see [LICENSE](LICENSE). Author: Glenn Leving.

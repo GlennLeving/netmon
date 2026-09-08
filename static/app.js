@@ -1,4 +1,4 @@
-/* netmon - web-UI
+/* netmon - web UI
  * Author: Glenn Leving
  */
 const $ = (id) => document.getElementById(id);
@@ -6,7 +6,7 @@ let CONFIG = null;
 let settingsDirty = false;
 let AUTHED = false;
 
-// ---------- formatering ----------
+// ---------- formatting ----------
 const pad = (n) => String(n).padStart(2, "0");
 function ts(t) {
   if (!t) return "-";
@@ -19,8 +19,8 @@ function dur(s) {
   s = Math.round(s);
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
         m = Math.floor(s % 3600 / 60), sec = s % 60;
-  if (d) return `${d}d ${h}t`;
-  if (h) return `${h}t ${m}m`;
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
   if (m) return `${m}m ${sec}s`;
   return `${sec}s`;
 }
@@ -38,7 +38,7 @@ async function refresh() {
   renderLinks(data);
   renderTargets(data.targets);
   $("clock").textContent =
-    `Sidste maaling: ${data.monitor.last_round ? ts(data.monitor.last_round) : "venter..."}`;
+    `Last round: ${data.monitor.last_round ? ts(data.monitor.last_round) : "waiting..."}`;
 }
 
 function renderLinks(d) {
@@ -48,22 +48,22 @@ function renderLinks(d) {
   const anyNet = d.targets.filter(t => t.enabled && t.kind === "internet");
   const netUp = anyNet.some(t => t.status === "up");
   items.push(card("Internet", anyNet.length === 0 ? "unknown" : (netUp ? "up" : "down"),
-    netUp ? "Forbindelse ok" : (anyNet.length ? "Ingen svar udefra" : "Ingen internet-vaerter")));
+    netUp ? "Connection ok" : (anyNet.length ? "No reply from outside" : "No internet hosts")));
 
   if (has("lan")) {
     const l = d.link.lan;
-    items.push(card("Lokalt netvaerk", l.status === "down" ? "down" : "up",
-      l.status === "down" ? `Nede siden ${ts(l.since)}` : "Router svarer"));
+    items.push(card("Local network", l.status === "down" ? "down" : "up",
+      l.status === "down" ? `Down since ${ts(l.since)}` : "Router is answering"));
   }
   const isp = d.link.isp;
   items.push(card("ISP", isp.status === "down" ? "down" : (isp.status === "up" ? "up" : "unknown"),
-    isp.status === "down" ? `Nede siden ${ts(isp.since)}` :
-    (has("lan") ? "Ingen ISP-nedbrud registreret" : "Tilfoej en LAN-vaert for ISP-detektion")));
+    isp.status === "down" ? `Down since ${ts(isp.since)}` :
+    (has("lan") ? "No ISP outage recorded" : "Add a LAN host to detect ISP outages")));
 
   $("links").innerHTML = items.join("");
 }
 function card(label, state, sub) {
-  const txt = { up: "OPPE", down: "NEDE", unknown: "UKENDT" }[state] || "UKENDT";
+  const txt = { up: "UP", down: "DOWN", unknown: "UNKNOWN" }[state] || "UNKNOWN";
   return `<div class="link ${state}"><div class="label">${esc(label)}</div>
     <div class="value">${txt}</div><div class="muted small">${esc(sub)}</div></div>`;
 }
@@ -74,7 +74,7 @@ function renderTargets(targets) {
     const max = Math.max(60, ...rtts);
     const spark = t.history.slice(-60).map(h => {
       const hgt = h.ok && h.rtt != null ? Math.max(8, (h.rtt / max) * 100) : 100;
-      const title = h.ok ? `${h.rtt} ms - ${ts(h.ts)}` : `ingen svar - ${ts(h.ts)}`;
+      const title = h.ok ? `${h.rtt} ms - ${ts(h.ts)}` : `no reply - ${ts(h.ts)}`;
       return `<i class="${h.ok ? "" : "bad"}" style="height:${hgt}%" title="${title}"></i>`;
     }).join("");
     return `<div class="card">
@@ -85,19 +85,19 @@ function renderTargets(targets) {
         <span class="card-host">${esc(t.host)}</span>
       </div>
       <div class="stats">
-        <div class="stat"><b>${t.rtt != null ? t.rtt + " ms" : "-"}</b><span>seneste svartid</span></div>
-        <div class="stat"><b>${t.avg_rtt24h != null ? t.avg_rtt24h + " ms" : "-"}</b><span>gns. 24t</span></div>
-        <div class="stat"><b>${t.uptime24h != null ? t.uptime24h + " %" : "-"}</b><span>oppetid 24t</span></div>
-        <div class="stat"><b>${t.since ? dur(Date.now() / 1000 - t.since) : "-"}</b><span>i denne status</span></div>
+        <div class="stat"><b>${t.rtt != null ? t.rtt + " ms" : "-"}</b><span>latest latency</span></div>
+        <div class="stat"><b>${t.avg_rtt24h != null ? t.avg_rtt24h + " ms" : "-"}</b><span>avg. 24h</span></div>
+        <div class="stat"><b>${t.uptime24h != null ? t.uptime24h + " %" : "-"}</b><span>uptime 24h</span></div>
+        <div class="stat"><b>${t.since ? dur(Date.now() / 1000 - t.since) : "-"}</b><span>in this state</span></div>
       </div>
-      <div class="spark">${spark || '<span class="muted small">venter paa data...</span>'}</div>
+      <div class="spark">${spark || '<span class="muted small">waiting for data...</span>'}</div>
       ${t.status === "down" || (t.fails > 0 && t.error)
-        ? `<div class="err">${esc(t.error || "ingen svar")}${t.fails ? ` (${t.fails} fejl i traek)` : ""}</div>` : ""}
+        ? `<div class="err">${esc(t.error || "no reply")}${t.fails ? ` (${t.fails} failures in a row)` : ""}</div>` : ""}
     </div>`;
   }).join("");
 }
 
-// ---------- indstillinger ----------
+// ---------- settings ----------
 function fillSettings(cfg) {
   $("cfg-interval").value = cfg.interval_seconds;
   $("cfg-timeout").value = cfg.timeout_seconds;
@@ -116,7 +116,7 @@ function rowHtml(t) {
       <option value="lan"${t.kind === "lan" ? " selected" : ""}>LAN</option>
     </select></td>
     <td><input type="checkbox" class="t-enabled"${t.enabled ? " checked" : ""}></td>
-    <td><button class="btn danger del">Fjern</button></td>
+    <td><button class="btn danger del">Remove</button></td>
   </tr>`;
 }
 function collect() {
@@ -161,7 +161,7 @@ $("login-box").onsubmit = async (e) => {
   });
   const j = await r.json();
   if (r.ok) { $("password").value = ""; setAuthed(true); }
-  else { msg.textContent = j.error || "login mislykkedes"; }
+  else { msg.textContent = j.error || "login failed"; }
 };
 $("logout").onclick = async () => {
   await fetch("/api/logout", { method: "POST" });
@@ -177,11 +177,11 @@ $("pw-form").onsubmit = async (e) => {
   const j = await r.json();
   $("pw-current").value = $("pw-new").value = "";
   if (r.ok) {
-    msg.textContent = "Adgangskode skiftet - log ind igen";
+    msg.textContent = "Password changed - log in again";
     msg.style.color = "var(--up)";
     setAuthed(false);
   } else {
-    msg.textContent = j.error || "kunne ikke skifte";
+    msg.textContent = j.error || "could not change it";
     msg.style.color = "var(--down)";
   }
   setTimeout(() => { msg.textContent = ""; }, 5000);
@@ -202,7 +202,7 @@ $("target-rows").onclick = (e) => {
 };
 $("save-config").onclick = async () => {
   const msg = $("save-msg");
-  msg.textContent = "Gemmer...";
+  msg.textContent = "Saving...";
   const r = await fetch("/api/config", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(collect()),
@@ -212,15 +212,15 @@ $("save-config").onclick = async () => {
     settingsDirty = false;
     CONFIG = j.config;
     fillSettings(CONFIG);
-    msg.textContent = "Gemt - maaling genstartet";
+    msg.textContent = "Saved - measuring restarted";
     msg.style.color = "var(--up)";
     refresh();
   } else if (r.status === 401) {
     setAuthed(false);
-    $("login-msg").textContent = "Sessionen er udloebet - log ind igen";
+    $("login-msg").textContent = "The session has expired - log in again";
     msg.textContent = "";
   } else {
-    msg.textContent = "Fejl: " + j.error;
+    msg.textContent = "Error: " + j.error;
     msg.style.color = "var(--down)";
   }
   setTimeout(() => { msg.textContent = ""; }, 4000);
@@ -230,12 +230,12 @@ $("check-now").onclick = async () => {
   setTimeout(refresh, 1200);
 };
 $("clear-log").onclick = async () => {
-  if (!confirm("Slet alle afsluttede nedetids-haendelser?")) return;
+  if (!confirm("Delete every finished outage event?")) return;
   const r = await fetch("/api/clear-log", { method: "POST" });
   if (r.status === 401) {
     setAuthed(false);
     $("settings").classList.remove("hidden");
-    $("login-msg").textContent = "Log ind for at rydde loggen";
+    $("login-msg").textContent = "Log in to clear the log";
     return;
   }
   loadLog();
@@ -251,11 +251,11 @@ async function loadLog() {
       <td><span class="badge ${o.scope}">${o.scope.toUpperCase()}</span></td>
       <td>${esc(o.name)}</td>
       <td>${ts(o.started)}</td>
-      <td>${o.ended ? ts(o.ended) : '<span class="ongoing">paagaar</span>'}</td>
+      <td>${o.ended ? ts(o.ended) : '<span class="ongoing">ongoing</span>'}</td>
       <td>${o.ended ? dur(o.duration) : dur(Date.now() / 1000 - o.started)}</td>
       <td class="muted">${esc(o.detail)}</td>
     </tr>`).join("")
-    : `<tr><td colspan="6" class="muted">Ingen nedetid registreret 🎉</td></tr>`;
+    : `<tr><td colspan="6" class="muted">No outages recorded 🎉</td></tr>`;
 }
 
 checkSession();

@@ -1,14 +1,14 @@
 <!doctype html>
 <!--
-  netmon - netvaerks- og ISP-overvaagning
+  netmon - network and ISP monitoring
   Author: Glenn Leving
 -->
-<html lang="da">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="author" content="Glenn Leving">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>netmon - netvaerksovervaagning</title>
+<title>netmon - network monitoring</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📡</text></svg>">
 <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -17,8 +17,8 @@
   <h1>📡 netmon</h1>
   <div class="head-right">
     <span id="clock" class="muted"></span>
-    <button id="check-now" class="btn">Tjek nu</button>
-    <button id="toggle-settings" class="btn">Indstillinger</button>
+    <button id="check-now" class="btn">Check now</button>
+    <button id="toggle-settings" class="btn">Settings</button>
   </div>
 </header>
 
@@ -27,48 +27,48 @@
 
   <section id="settings" class="panel hidden">
     <div class="settings-head">
-      <h2>Indstillinger</h2>
-      <button id="logout" class="btn hidden">Log ud</button>
+      <h2>Settings</h2>
+      <button id="logout" class="btn hidden">Log out</button>
     </div>
 
     <form id="login-box" class="login hidden" autocomplete="off">
-      <p class="muted small">Indstillinger er beskyttet. Indtast adgangskode for at aendre dem.</p>
+      <p class="muted small">The settings are protected. Enter the password to change them.</p>
       <div class="login-row">
-        <input id="password" type="password" placeholder="Adgangskode" autocomplete="current-password">
-        <button type="submit" class="btn primary">Log ind</button>
+        <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+        <button type="submit" class="btn primary">Log in</button>
       </div>
       <div id="login-msg" class="err-msg"></div>
     </form>
 
     <div id="settings-body" class="hidden">
     <div class="grid">
-      <label>Frekvens (sek. mellem maalinger)<input id="cfg-interval" type="number" min="1" max="86400"></label>
-      <label>Wait-time (sek. timeout pr. ping)<input id="cfg-timeout" type="number" min="0.1" max="60" step="0.1"></label>
-      <label>Pings pr. maaling<input id="cfg-count" type="number" min="1" max="10"></label>
-      <label>Fejl i traek foer "nede"<input id="cfg-fail" type="number" min="1" max="100"></label>
-      <label>OK i traek foer "oppe"<input id="cfg-recover" type="number" min="1" max="100"></label>
-      <label>Gem maalinger (dage)<input id="cfg-retention" type="number" min="1" max="3650"></label>
+      <label>Interval (seconds between rounds)<input id="cfg-interval" type="number" min="1" max="86400"></label>
+      <label>Timeout (seconds per ping)<input id="cfg-timeout" type="number" min="0.1" max="60" step="0.1"></label>
+      <label>Pings per measurement<input id="cfg-count" type="number" min="1" max="10"></label>
+      <label>Failures in a row before "down"<input id="cfg-fail" type="number" min="1" max="100"></label>
+      <label>Successes in a row before "up"<input id="cfg-recover" type="number" min="1" max="100"></label>
+      <label>Keep measurements (days)<input id="cfg-retention" type="number" min="1" max="3650"></label>
     </div>
 
-    <h3>Testservere</h3>
+    <h3>Test servers</h3>
     <table class="targets-edit">
-      <thead><tr><th>Navn</th><th>Vaert (IP/hostnavn)</th><th>Type</th><th>Aktiv</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Host (IP/hostname)</th><th>Type</th><th>Active</th><th></th></tr></thead>
       <tbody id="target-rows"></tbody>
     </table>
     <div class="row-actions">
-      <button id="add-target" class="btn">+ Tilfoej testserver</button>
-      <span class="muted small">Type <b>LAN</b> = lokal (fx router). <b>Internet</b> = ekstern. Er LAN oppe men alle internet-vaerter nede, logges det som ISP-nedbrud.</span>
+      <button id="add-target" class="btn">+ Add test server</button>
+      <span class="muted small">Type <b>LAN</b> = local (your router, say). <b>Internet</b> = external. If LAN is up but every internet host is down, it is logged as an ISP outage.</span>
     </div>
     <div class="row-actions">
-      <button id="save-config" class="btn primary">Gem</button>
+      <button id="save-config" class="btn primary">Save</button>
       <span id="save-msg" class="muted"></span>
     </div>
 
-    <h3>Skift adgangskode</h3>
+    <h3>Change password</h3>
     <form id="pw-form" class="login-row" autocomplete="off">
-      <input id="pw-current" type="password" placeholder="Nuvaerende" autocomplete="current-password">
-      <input id="pw-new" type="password" placeholder="Ny (min. 4 tegn)" autocomplete="new-password">
-      <button type="submit" class="btn">Skift</button>
+      <input id="pw-current" type="password" placeholder="Current" autocomplete="current-password">
+      <input id="pw-new" type="password" placeholder="New (min. 4 characters)" autocomplete="new-password">
+      <button type="submit" class="btn">Change</button>
       <span id="pw-msg" class="muted small"></span>
     </form>
     </div>
@@ -78,19 +78,19 @@
 
   <section class="panel">
     <div class="log-head">
-      <h2>Nedetids-log</h2>
+      <h2>Outage log</h2>
       <div>
         <select id="log-scope">
-          <option value="all">Alt</option>
-          <option value="link">Kun netvaerk/ISP</option>
-          <option value="target">Kun enkelte servere</option>
+          <option value="all">Everything</option>
+          <option value="link">Network/ISP only</option>
+          <option value="target">Individual servers only</option>
         </select>
-        <a class="btn" href="/api/export.csv?limit=2000">Eksporter CSV</a>
-        <button id="clear-log" class="btn danger">Ryd afsluttede</button>
+        <a class="btn" href="/api/export.csv?limit=2000">Export CSV</a>
+        <button id="clear-log" class="btn danger">Clear finished</button>
       </div>
     </div>
     <table class="log">
-      <thead><tr><th>Type</th><th>Hvad</th><th>Start</th><th>Slut</th><th>Varighed</th><th>Detalje</th></tr></thead>
+      <thead><tr><th>Type</th><th>What</th><th>Start</th><th>End</th><th>Duration</th><th>Detail</th></tr></thead>
       <tbody id="log-rows"></tbody>
     </table>
   </section>
