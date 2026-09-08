@@ -140,6 +140,21 @@ To change the port or listen address, edit `ExecStart` in the unit file and run:
 systemctl --user daemon-reload && systemctl --user restart netmon
 ```
 
+## Updating
+
+`update.sh` fetches the latest code, restarts the service and checks that it
+actually came back:
+
+```
+./update.sh
+```
+
+It refuses to run while the working tree has uncommitted changes, syntax-checks
+the new code before restarting, and if the service does not answer afterwards it
+resets to the previous commit and restarts again — so a broken commit does not
+leave you with a dead service. `config.json`, `auth.json` and the database are
+ignored by git and are never touched.
+
 ## Notes
 
 * The status view itself is open without a login — only bind to `0.0.0.0` on a
