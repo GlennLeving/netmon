@@ -12,7 +12,7 @@ Ingen dependencies - kun Python 3 stdlib og systemets `ping`.
 Kraever kun Python 3.9+ og systemets `ping`. Ingen pip-pakker.
 
 ```
-git clone https://github.com/<bruger>/netmon.git
+git clone https://github.com/GlennLeving/netmon.git
 cd netmon
 python3 netmon.py --set-password     # saet adgangskode til indstillinger
 ./start.sh
