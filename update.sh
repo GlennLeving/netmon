@@ -52,22 +52,33 @@ if ! systemctl --user is-enabled "$SERVICE" >/dev/null 2>&1; then
     exit 0
 fi
 
+# Waits for the service to actually answer, not just for systemd to say it
+# started. Quiet while it retries - a starting service refusing connections is
+# expected, and only the verdict is worth printing.
+wait_healthy() {
+    local _
+    for _ in $(seq 1 30); do
+        curl -fs -o /dev/null --max-time 2 "$HEALTH_URL" && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
 say "update: restarting $SERVICE ..."
 systemctl --user restart "$SERVICE"
 
-# Wait for the service to actually answer, not just for systemd to report started.
-ok=""
-for _ in $(seq 1 30); do
-    if curl -fsS -o /dev/null --max-time 2 "$HEALTH_URL"; then ok=1; break; fi
-    sleep 0.5
-done
-
-if [ -z "$ok" ]; then
-    say "update: $SERVICE did not answer on $HEALTH_URL - rolling back." >&2
-    git reset --hard --quiet "$old"
-    systemctl --user restart "$SERVICE"
-    say "update: rolled back to $(git rev-parse --short HEAD). Check: journalctl --user -u $SERVICE -n 40" >&2
-    exit 1
+if wait_healthy; then
+    say "update: done - $SERVICE is up on $(git rev-parse --short HEAD)."
+    exit 0
 fi
 
-say "update: done - $SERVICE is up on $(git rev-parse --short HEAD)."
+say "update: $SERVICE did not answer on $HEALTH_URL - rolling back." >&2
+git reset --hard --quiet "$old"
+systemctl --user restart "$SERVICE"
+if wait_healthy; then
+    say "update: rolled back to $(git rev-parse --short HEAD), $SERVICE is up again." >&2
+else
+    say "update: rolled back to $(git rev-parse --short HEAD), but $SERVICE still does not answer." >&2
+fi
+say "Check: journalctl --user -u $SERVICE -n 40" >&2
+exit 1
